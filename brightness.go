@@ -1,6 +1,7 @@
 package brightness
 
 import (
+	"fmt"
 	"io/ioutil"
 	"math"
 	"strconv"
@@ -33,8 +34,11 @@ func getBrightnessType(filename string) (int, error) {
 }
 
 func getBrightness() (int, error) {
-	fMaxBrightness := "/sys/devices/pci0000:00/0000:00:02.0/drm/card0/card0-eDP-1/intel_backlight/max_brightness"
-	fCurrentBrightness := "/sys/devices/pci0000:00/0000:00:02.0/drm/card0/card0-eDP-1/intel_backlight/actual_brightness"
+	backlight_path := "/sys/devices/pci0000:00/0000:00:08.1/0000:e3:00.0/backlight/amdgpu_bl0"
+	//backlight_path := "/sys/devices/pci0000:00/0000:00:02.0/drm/card0/card0-eDP-1/intel_backlight"
+
+	fMaxBrightness := fmt.Sprintf("%s/max_brightness", backlight_path)
+	fCurrentBrightness := fmt.Sprintf("%s/actual_brightness", backlight_path)
 
 	max, err := getBrightnessType(fMaxBrightness)
 	if err != nil {
