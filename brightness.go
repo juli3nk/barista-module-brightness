@@ -1,101 +1,87 @@
 package brightness
 
 import (
-	"fmt"
-	"io/ioutil"
-	"math"
-	"strconv"
-	"strings"
-	"time"
-
-	"barista.run/bar"
-	"barista.run/base/value"
-	"barista.run/outputs"
-	"barista.run/timing"
+  "fmt"
+  "io/ioutil"
+  "math"
+  "os"
+  "runtime"
+  "strconv"
+  "strings"
 )
 
-type Module struct {
-	scheduler *timing.Scheduler
-	outputFunc value.Value // of func(string) bar.Output
+func getKernel() (string, error) {
+  var cpu string
+  if runtime.GOARCH == "amd64" {
+    cpu = "amd"
+	}
+  if runtime.GOARCH == "386" {
+    cpu = "intel"
+  }
+
+  files, err := os.ReadDir("/sys/class/backlight")
+  if err != nil {
+    return "", err
+  }
+
+  for _, file := range files {
+    if strings.Contains(file.Name(), cpu) {
+      return file.Name(), nil
+    }
+  }
+
+  return "", nil
 }
 
-func getBrightnessType(filename string) (int, error) {
-	data, err := ioutil.ReadFile(filename)
-	if err != nil {
-		return -1, err
-	}
+func readValue(kernel, name string) (int, error) {
+  file := fmt.Sprintf("/sys/class/backlight/%s/%s", kernel, name)
 
-	value, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return -1, err
-	}
+  bytes, err := ioutil.ReadFile(file)
+  if err != nil {
+    return 0, err
+  }
 
-	return value, nil
+  dat := strings.TrimSpace(string(bytes))
+
+  n, err := strconv.Atoi(dat)
+  if err != nil {
+    return 0, err
+  }
+  return n, nil
 }
 
+// Fraction returns the brightness as a fraction of the maximum value.
+func fraction(max, bri int) float64 {
+  if max == 0 {
+    return 0
+  }
+
+  return float64(bri) / float64(max)
+}
+
+// Percent returns the brightness in percent of the maximum value.
+func percent(max, bri int) int {
+  return int(math.Round(fraction(max, bri) * 100.0))
+}
+
+// Get updates the Bri and Max values after reading the respective files.
 func getBrightness() (int, error) {
-	backlight_path := "/sys/devices/pci0000:00/0000:00:08.1/0000:e3:00.0/backlight/amdgpu_bl0"
-	//backlight_path := "/sys/devices/pci0000:00/0000:00:02.0/drm/card0/card0-eDP-1/intel_backlight"
+  kernel, err := getKernel()
+  if err != nil {
+    return -1, err
+  }
 
-	fMaxBrightness := fmt.Sprintf("%s/max_brightness", backlight_path)
-	fCurrentBrightness := fmt.Sprintf("%s/actual_brightness", backlight_path)
+  max, err := readValue(kernel, "max_brightness")
+  if err != nil {
+    return -1, err
+  }
 
-	max, err := getBrightnessType(fMaxBrightness)
-	if err != nil {
-		return -1, err
-	}
+  bri, err := readValue(kernel, "actual_brightness")
+  if err != nil {
+    return -1, err
+  }
 
-	current, err := getBrightnessType(fCurrentBrightness)
-	if err != nil {
-		return -1, err
-	}
+  value := percent(max, bri)
 
-	value := float64(current) / float64(max) * 100
-
-	return int(math.Ceil(value)), nil
-}
-
-func New() *Module {
-	m := &Module{scheduler: timing.NewScheduler()}
-	m.RefreshInterval(3 * time.Second)
-
-	m.outputFunc.Set(func(in string) bar.Output {
-		return outputs.Text(in)
-	})
-
-	return m
-}
-
-func (m *Module) Output(outputFunc func(int) bar.Output) *Module {
-	m.outputFunc.Set(outputFunc)
-	return m
-}
-
-// RefreshInterval configures the polling frequency for getloadavg.
-func (m *Module) RefreshInterval(interval time.Duration) *Module {
-	m.scheduler.Every(interval)
-	return m
-}
-
-func (m *Module) Stream(s bar.Sink) {
-	outputFunc := m.outputFunc.Get().(func(int) bar.Output)
-
-	nextOutputFunc, done := m.outputFunc.Subscribe()
-	defer done()
-
-	data, err := getBrightness()
-	for {
-		if s.Error(err) {
-			return
-		}
-
-		s.Output(outputFunc(data))
-
-		select {
-		case <-m.scheduler.C:
-			data, err = getBrightness()
-		case <-nextOutputFunc:
-			outputFunc = m.outputFunc.Get().(func(int) bar.Output)
-		}
-	}
+  return value, nil
 }
