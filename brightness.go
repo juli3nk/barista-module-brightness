@@ -1,87 +1,45 @@
 package brightness
 
 import (
-  "fmt"
-  "io/ioutil"
-  "math"
-  "os"
-  "runtime"
-  "strconv"
-  "strings"
+	"fmt"
+	"io/ioutil"
+	"math"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 )
 
-func getKernel() (string, error) {
-  var cpu string
-  if runtime.GOARCH == "amd64" {
-    cpu = "amd"
+func getBacklightPath() (string, error) {
+	basePath := "/sys/class/backlight/"
+
+	entries, err := os.ReadDir(basePath)
+	if err != nil || len(entries) == 0 {
+		return "", fmt.Errorf("no backlight device detected")
 	}
-  if runtime.GOARCH == "386" {
-    cpu = "intel"
-  }
 
-  files, err := os.ReadDir("/sys/class/backlight")
-  if err != nil {
-    return "", err
-  }
-
-  for _, file := range files {
-    if strings.Contains(file.Name(), cpu) {
-      return file.Name(), nil
-    }
-  }
-
-  return "", nil
+	return filepath.Join(basePath, entries[0].Name()), nil
 }
 
-func readValue(kernel, name string) (int, error) {
-  file := fmt.Sprintf("/sys/class/backlight/%s/%s", kernel, name)
+func readIntFromFile(filename string) (int, error) {
+	data, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return -1, err
+	}
 
-  bytes, err := ioutil.ReadFile(file)
-  if err != nil {
-    return 0, err
-  }
+	value, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return -1, err
+	}
 
-  dat := strings.TrimSpace(string(bytes))
-
-  n, err := strconv.Atoi(dat)
-  if err != nil {
-    return 0, err
-  }
-  return n, nil
+	return value, nil
 }
 
-// Fraction returns the brightness as a fraction of the maximum value.
-func fraction(max, bri int) float64 {
-  if max == 0 {
-    return 0
-  }
+func getBrightness(brightnessPath string, maxBrightness int) (int, error) {
+	currentBrightness, err := readIntFromFile(filepath.Join(brightnessPath, "actual_brightness"))
+	if err != nil {
+		return -1, err
+	}
 
-  return float64(bri) / float64(max)
-}
-
-// Percent returns the brightness in percent of the maximum value.
-func percent(max, bri int) int {
-  return int(math.Round(fraction(max, bri) * 100.0))
-}
-
-// Get updates the Bri and Max values after reading the respective files.
-func getBrightness() (int, error) {
-  kernel, err := getKernel()
-  if err != nil {
-    return -1, err
-  }
-
-  max, err := readValue(kernel, "max_brightness")
-  if err != nil {
-    return -1, err
-  }
-
-  bri, err := readValue(kernel, "actual_brightness")
-  if err != nil {
-    return -1, err
-  }
-
-  value := percent(max, bri)
-
-  return value, nil
+	return int(math.Round(float64(currentBrightness) / float64(maxBrightness) * 100)), nil
 }

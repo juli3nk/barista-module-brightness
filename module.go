@@ -1,25 +1,39 @@
 package brightness
 
 import (
-	"time"
+	"fmt"
+	"path/filepath"
 
-	"barista.run/bar"
-	"barista.run/base/value"
-	"barista.run/outputs"
-	"barista.run/timing"
+	"github.com/barista-run/barista/bar"
+	"github.com/barista-run/barista/base/value"
+	"github.com/barista-run/barista/outputs"
+	"github.com/fsnotify/fsnotify"
 )
 
 type Module struct {
-	scheduler *timing.Scheduler
-	outputFunc value.Value // of func(string) bar.Output
+	outputFunc  value.Value // of func(int) bar.Output
+	brightnessPath string
+	maxBrightness  int
 }
 
 func New() *Module {
-	m := &Module{scheduler: timing.NewScheduler()}
-	m.RefreshInterval(3 * time.Second)
+	m := &Module{}
 
-	m.outputFunc.Set(func(in string) bar.Output {
-		return outputs.Text(in)
+	path, err := getBacklightPath()
+	if err != nil {
+		fmt.Println("Erreur : impossible de détecter le périphérique de rétroéclairage.")
+		return nil
+	}
+	m.brightnessPath = path
+
+	m.maxBrightness, err = readIntFromFile(filepath.Join(m.brightnessPath, "max_brightness"))
+	if err != nil {
+		fmt.Println("Erreur : impossible de lire max_brightness.")
+		return nil
+	}
+
+	m.outputFunc.Set(func(in int) bar.Output {
+		return outputs.Textf("%d", in)
 	})
 
 	return m
@@ -30,31 +44,44 @@ func (m *Module) Output(outputFunc func(int) bar.Output) *Module {
 	return m
 }
 
-// RefreshInterval configures the polling frequency for getloadavg.
-func (m *Module) RefreshInterval(interval time.Duration) *Module {
-	m.scheduler.Every(interval)
-	return m
-}
-
 func (m *Module) Stream(s bar.Sink) {
 	outputFunc := m.outputFunc.Get().(func(int) bar.Output)
 
-	nextOutputFunc, done := m.outputFunc.Subscribe()
-	defer done()
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		s.Error(err)
+		return
+	}
+	defer watcher.Close()
 
-	data, err := getBrightness()
+	brightnessFile := filepath.Join(m.brightnessPath, "actual_brightness")
+	err = watcher.Add(brightnessFile)
+	if err != nil {
+		s.Error(err)
+		return
+	}
+
+	data, err := getBrightness(m.brightnessPath, m.maxBrightness)
+	if err != nil {
+		s.Error(err)
+		return
+	}
+	s.Output(outputFunc(data))
+
 	for {
-		if s.Error(err) {
-			return
-		}
-
-		s.Output(outputFunc(data))
-
 		select {
-		case <-m.scheduler.C:
-			data, err = getBrightness()
-		case <-nextOutputFunc:
-			outputFunc = m.outputFunc.Get().(func(int) bar.Output)
+		case event := <-watcher.Events:
+			if event.Op&fsnotify.Write == fsnotify.Write {
+				data, err = getBrightness(m.brightnessPath, m.maxBrightness)
+				if err != nil {
+					s.Error(err)
+					return
+				}
+				s.Output(outputFunc(data))
+			}
+		case err := <-watcher.Errors:
+			s.Error(err)
+			return
 		}
 	}
 }
